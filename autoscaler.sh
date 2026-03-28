@@ -2,20 +2,34 @@
 # autoscaler.sh - Intelligent API-driven bare-metal autoscaler
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
-MAX_RUNNERS=5
-MIN_IDLE=1
 GITHUB_ORG="auditRAMP"
 
-if [ -z "$GH_ARC_RUNNERS" ]; then
-  echo "[Autoscaler] Critical Error: GH_ARC_RUNNERS missing. Cannot query GitHub API."
+if [ -z "$GH_RUNNER_PAT" ]; then
+  echo "[Autoscaler] Critical Error: GH_RUNNER_PAT missing. Cannot query GitHub API."
   exit 1
 fi
 
 echo "=== Bare-Metal API Autoscaler Started ==="
-echo "Monitoring $GITHUB_ORG runners up to a maximum capacity of $MAX_RUNNERS."
+echo "The daemon uses scaler.properties to hot-reload values dynamically."
 
 while true; do
   declare -a ALL_RUNNING_INDEXES=()
+  
+  # Hot-Reloading: Read variables dynamically on every tick
+  MAX_RUNNERS=5
+  MIN_IDLE=1
+  POLL_INTERVAL=15
+  
+  if [ -f "$SCRIPT_DIR/scaler.properties" ]; then
+    VAL_MAX=$(grep -E "^MAX_RUNNERS=" "$SCRIPT_DIR/scaler.properties" | cut -d '=' -f2 | tr -d '\r')
+    VAL_MIN=$(grep -E "^MIN_IDLE=" "$SCRIPT_DIR/scaler.properties" | cut -d '=' -f2 | tr -d '\r')
+    VAL_POLL=$(grep -E "^POLL_INTERVAL=" "$SCRIPT_DIR/scaler.properties" | cut -d '=' -f2 | tr -d '\r')
+    
+    # Safe regex validation to survive typos
+    [[ "$VAL_MAX" =~ ^[0-9]+$ ]] && MAX_RUNNERS=$VAL_MAX
+    [[ "$VAL_MIN" =~ ^[0-9]+$ ]] && MIN_IDLE=$VAL_MIN
+    [[ "$VAL_POLL" =~ ^[0-9]+$ ]] && POLL_INTERVAL=$VAL_POLL
+  fi
   
   # Scan for which shell loops are physically active on this machine
   for i in $(seq 1 $MAX_RUNNERS); do
@@ -34,7 +48,7 @@ while true; do
   # Poll GitHub backend
   API_RESPONSE=$(curl -s -L \
     -H "Accept: application/vnd.github+json" \
-    -H "Authorization: Bearer $GH_ARC_RUNNERS" \
+    -H "Authorization: Bearer $GH_RUNNER_PAT" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
     "https://api.github.com/orgs/${GITHUB_ORG}/actions/runners")
 
@@ -60,7 +74,7 @@ while true; do
     for i in $(seq 1 $MAX_RUNNERS); do
       if [[ ! " ${ALL_RUNNING_INDEXES[*]} " =~ " ${i} " ]]; then
         echo "[Autoscaler] GitHub API reports $IDLE_COUNT Idle baremetal runners. Scaling UP Runner $i..."
-        RUNNER_PATH="$SCRIPT_DIR/../actions-runner-${i}"
+        RUNNER_PATH="$SCRIPT_DIR/actions-runner-${i}"
         
         nohup "$SCRIPT_DIR/runner-loop.sh" "$RUNNER_PATH" "$i" > "$SCRIPT_DIR/runner-${i}.log" 2>&1 &
         echo $! > "$SCRIPT_DIR/runner-${i}.pid"
@@ -90,7 +104,6 @@ while true; do
     fi
   fi
   
-  # Polling every 15 seconds consumes exactly 240 API requests / hour.
-  # Your total authenticated API capacity is natively 5,000 / hour, so this consumes < 5%.
-  sleep 15
+  # Your total authenticated API capacity is natively 5,000 / hour.
+  sleep $POLL_INTERVAL
 done

@@ -10,8 +10,8 @@ if [ -z "$RUNNER_DIR" ] || [ -z "$RUNNER_ID" ]; then
   exit 1
 fi
 
-if [ -z "$GH_ARC_RUNNERS" ]; then
-  echo "Error: GH_ARC_RUNNERS environment variable is not set."
+if [ -z "$GH_RUNNER_PAT" ]; then
+  echo "Error: GH_RUNNER_PAT environment variable is not set."
   exit 1
 fi
 
@@ -35,7 +35,7 @@ while true; do
   echo "[Runner $RUNNER_ID] Requesting new GitHub registration token..."
   TOKEN_RES=$(curl -s -L -X POST \
     -H "Accept: application/vnd.github+json" \
-    -H "Authorization: Bearer $GH_ARC_RUNNERS" \
+    -H "Authorization: Bearer $GH_RUNNER_PAT" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
     "https://api.github.com/orgs/${GITHUB_ORG}/actions/runners/registration-token")
 

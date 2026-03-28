@@ -6,27 +6,23 @@ echo "=== Stopping Bare-Metal Runners ==="
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 
 # First, kill the autoscaler so it doesn't try to revive runners
-AUTOSCALER_PID_FILE="$SCRIPT_DIR/autoscaler.pid"
-if [ -f "$AUTOSCALER_PID_FILE" ]; then
-  AUTOSCALER_PID=$(cat "$AUTOSCALER_PID_FILE")
-  echo "Stopping Autoscaler daemon (PID: $AUTOSCALER_PID)..."
-  kill -9 $AUTOSCALER_PID 2>/dev/null || true
-  rm -f "$AUTOSCALER_PID_FILE"
-fi
+echo "Terminating all Autoscaler daemons globally to prevent rogue ghosting..."
+pkill -9 -f "autoscaler.sh" || true
+rm -f "$SCRIPT_DIR/autoscaler.pid"
 
-# Ensure all 5 potential workers are stopped
-for i in {1..5}; do
-  PID_FILE="$SCRIPT_DIR/runner-${i}.pid"
-  
+# Ensure all potential loop workers are stopped regardless of scalar limits
+for PID_FILE in "$SCRIPT_DIR"/runner-*.pid; do
   if [ -f "$PID_FILE" ]; then
     PID=$(cat "$PID_FILE")
-    echo "Stopping runner loop $i (PID: $PID)..."
+    echo "Stopping background runner loop (PID: $PID)..."
     
     # Kill the background loop script
     kill -9 $PID 2>/dev/null || true
-    rm -f "$PID_FILE" "$SCRIPT_DIR/runner-${i}.state"
+    rm -f "$PID_FILE" 
     
-    echo "Runner loop $i stopped."
+    # If a state file was lingering, wipe it securely
+    STATE_FILE="${PID_FILE%.pid}.state"
+    rm -f "$STATE_FILE"
   fi
 done
 
@@ -34,10 +30,17 @@ done
 echo "Terminating any lingering GitHub Runner Listeners..."
 pkill -f "Runner.Listener" || true
 
+# Extract max limit to ensure we purge all possible configured directories
+MAX_RUNNERS=5
+if [ -f "$SCRIPT_DIR/scaler.properties" ]; then
+  VAL_MAX=$(grep -E "^MAX_RUNNERS=" "$SCRIPT_DIR/scaler.properties" | cut -d '=' -f2 | tr -d '\r')
+  [[ "$VAL_MAX" =~ ^[0-9]+$ ]] && MAX_RUNNERS=$VAL_MAX
+fi
+
 # Clean up any partial state
 echo "Cleaning up local runner configuration caches just in case..."
-for i in {1..5}; do
-  RUNNER_PATH="$SCRIPT_DIR/../actions-runner-${i}"
+for i in $(seq 1 $MAX_RUNNERS); do
+  RUNNER_PATH="$SCRIPT_DIR/actions-runner-${i}"
   if [ -d "$RUNNER_PATH" ]; then
       rm -f "$RUNNER_PATH/.runner" "$RUNNER_PATH/.credentials" "$RUNNER_PATH/.credentials_rsaparams" 2>/dev/null || true
   fi
