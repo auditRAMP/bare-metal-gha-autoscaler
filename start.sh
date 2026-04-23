@@ -8,10 +8,22 @@ if [ -z "$GH_RUNNER_PAT" ]; then
   exit 1
 fi
 
+if [ -z "${GH_RUNNER_ORG:-}" ]; then
+  echo "Error: GH_RUNNER_ORG environment variable must be set (e.g. export GH_RUNNER_ORG=auditRAMP)."
+  exit 1
+fi
+
 echo "=== Starting Bare-Metal Autoscaler ==="
 
 # Get the absolute path of this project directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
+
+# Stamp (or read) this machine's stable short id so runner names don't
+# collide with other hosts running the same autoscaler.
+# shellcheck source=machine-id.sh
+source "$SCRIPT_DIR/machine-id.sh"
+MACHINE_HASH=$(ensure_machine_id "$SCRIPT_DIR")
+echo "Machine identity: ${MACHINE_HASH} (runners will be named audit-runner-baremetal-<N>-${MACHINE_HASH})"
 
 # Detect OS
 OS_RAW=$(uname -s | tr '[:upper:]' '[:lower:]')
