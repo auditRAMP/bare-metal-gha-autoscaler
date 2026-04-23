@@ -20,6 +20,43 @@ RUNNER_NAME_PREFIX="${GH_RUNNER_NAME_PREFIX:-baremetal-runner}"
 RUNNER_NAME_PREFIX_MATCH="${RUNNER_NAME_PREFIX}-"
 RUNNER_NAME_SUFFIX="-${MACHINE_HASH}"
 
+# Detect OS/arch so we can provision missing runner directories on demand
+# when MAX_RUNNERS is hot-reloaded higher than what start.sh initially created.
+OS_RAW=$(uname -s | tr '[:upper:]' '[:lower:]')
+case "$OS_RAW" in
+  darwin) OS="osx" ;;
+  linux)  OS="linux" ;;
+  *) echo "[Autoscaler] Unsupported OS: $OS_RAW"; exit 1 ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64)   ARCH_NAME="x64" ;;
+  arm64|aarch64)  ARCH_NAME="arm64" ;;
+  *) echo "[Autoscaler] Unsupported arch: $(uname -m)"; exit 1 ;;
+esac
+RUNNER_VERSION="2.333.0"
+TARBALL_PATH="$SCRIPT_DIR/actions-runner-${OS}-${ARCH_NAME}-${RUNNER_VERSION}.tar.gz"
+
+# ensure_runner_dir <index>
+# Returns 0 if actions-runner-<index> is ready, 1 if it could not be provisioned.
+ensure_runner_dir() {
+  local idx="$1"
+  local path="$SCRIPT_DIR/actions-runner-${idx}"
+  if [ -d "$path" ] && [ -x "$path/config.sh" ]; then
+    return 0
+  fi
+  if [ ! -f "$TARBALL_PATH" ]; then
+    echo "[Autoscaler] Cannot provision Runner $idx: tarball missing at $TARBALL_PATH"
+    return 1
+  fi
+  echo "[Autoscaler] Provisioning missing directory for Runner $idx from tarball..."
+  mkdir -p "$path"
+  if ! tar xzf "$TARBALL_PATH" -C "$path"; then
+    echo "[Autoscaler] Failed to extract tarball for Runner $idx"
+    return 1
+  fi
+  return 0
+}
+
 echo "=== Bare-Metal API Autoscaler Started (machine=${MACHINE_HASH}, prefix=${RUNNER_NAME_PREFIX}) ==="
 echo "The daemon uses scaler.properties to hot-reload values dynamically."
 
@@ -84,12 +121,19 @@ while true; do
     # Find the lowest available index
     for i in $(seq 1 $MAX_RUNNERS); do
       if [[ ! " ${ALL_RUNNING_INDEXES[*]} " =~ " ${i} " ]]; then
-        echo "[Autoscaler] Machine ${MACHINE_HASH} has $IDLE_COUNT idle runner(s). Scaling UP Runner $i..."
         RUNNER_PATH="$SCRIPT_DIR/actions-runner-${i}"
-        
+
+        if ! ensure_runner_dir "$i"; then
+          echo "[Autoscaler] Skipping scale-up of Runner $i (provisioning failed). Sleeping before retry."
+          sleep 30
+          break
+        fi
+
+        echo "[Autoscaler] Machine ${MACHINE_HASH} has $IDLE_COUNT idle runner(s). Scaling UP Runner $i..."
+
         nohup "$SCRIPT_DIR/runner-loop.sh" "$RUNNER_PATH" "$i" > "$SCRIPT_DIR/runner-${i}.log" 2>&1 &
         echo $! > "$SCRIPT_DIR/runner-${i}.pid"
-        
+
         # Give GitHub a moment to register the new runner before polling again
         sleep 10
         break # Only launch one per loop iteration
@@ -97,22 +141,38 @@ while true; do
     done
   fi
   
-  # SCALE DOWN: If we have excess runners idling, terminate one
-  if [ "$IDLE_COUNT" -gt "$MIN_IDLE" ]; then
+  # SCALE DOWN: If we have excess runners idling, terminate one.
+  # Guard on ALL_RUNNING_INDEXES being non-empty — otherwise GitHub-reported
+  # idle runners with no local pid file would cause a busy loop of empty
+  # "Scaling DOWN Runner " messages.
+  if [ "$IDLE_COUNT" -gt "$MIN_IDLE" ] && [ "${#ALL_RUNNING_INDEXES[@]}" -gt 0 ]; then
     # Grab the highest index we are locally running
     IFS=$'\n' sorted=($(sort -nr <<<"${ALL_RUNNING_INDEXES[*]}")); unset IFS
     KILL_INDEX=${sorted[0]}
-    
+
     echo "[Autoscaler] Machine ${MACHINE_HASH} has $IDLE_COUNT idle runner(s). Scaling DOWN Runner $KILL_INDEX..."
-    
+
+    # Signal the listener to deregister first so GitHub marks it offline.
+    # The cmdline is `<script_dir>/actions-runner-N/bin/Runner.Listener run`,
+    # so anchor the pkill regex on the directory/binary path.
+    pkill -INT -f "actions-runner-${KILL_INDEX}/bin/Runner.Listener" 2>/dev/null || true
+
+    # Give the listener a few seconds to cleanly deregister from GitHub
+    sleep 5
+
+    # Stop the supervising loop shell so it does not restart the listener
     if [ -f "$SCRIPT_DIR/runner-${KILL_INDEX}.pid" ]; then
         PID=$(cat "$SCRIPT_DIR/runner-${KILL_INDEX}.pid")
+        kill -TERM $PID 2>/dev/null || true
+        sleep 1
         kill -9 $PID 2>/dev/null || true
         rm -f "$SCRIPT_DIR/runner-${KILL_INDEX}.pid"
-        
-        # Cleanly signal the actual `.NET` listener to deregister and shutdown gracefully
-        pkill -INT -f "Runner.Listener .*actions-runner-${KILL_INDEX}" || true
     fi
+
+    # Force-kill any listener still lingering after graceful window.
+    # Without this, a SIGKILL on the loop shell would orphan the Runner.Listener
+    # child (reparented to init), keeping it online in GitHub's view.
+    pkill -9 -f "actions-runner-${KILL_INDEX}/bin/Runner.Listener" 2>/dev/null || true
   fi
   
   # Your total authenticated API capacity is natively 5,000 / hour.

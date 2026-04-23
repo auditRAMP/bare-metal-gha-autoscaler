@@ -33,15 +33,16 @@ echo "[Runner $RUNNER_ID] Starting ephemeral loop in $RUNNER_DIR (name=$RUNNER_N
 # Move to the physical runner directory
 cd "$RUNNER_DIR" || exit 1
 
-# Clean up any lingering configurations from prior runs just to be absolutely safe
-if [ -f ".runner" ]; then
-  echo "[Runner $RUNNER_ID] Cleaning up old .runner file"
-  rm .runner || true
-  rm .credentials || true
-  rm .credentials_rsaparams || true
-fi
-
 while true; do
+  # Clean up any lingering configuration from a prior iteration.
+  # --ephemeral removes the GitHub-side registration, but leaves the local
+  # .runner/.credentials files on disk. config.sh refuses to reconfigure
+  # while those exist, so clear them at the top of every iteration.
+  if [ -f ".runner" ]; then
+    echo "[Runner $RUNNER_ID] Cleaning up stale local runner config"
+    rm -f .runner .credentials .credentials_rsaparams || true
+  fi
+
   echo "[Runner $RUNNER_ID] Requesting new GitHub registration token..."
   TOKEN_RES=$(curl -s -L -X POST \
     -H "Accept: application/vnd.github+json" \
