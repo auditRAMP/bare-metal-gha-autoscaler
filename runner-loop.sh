@@ -47,7 +47,7 @@ while true; do
     -H "Accept: application/vnd.github+json" \
     -H "Authorization: Bearer $GH_RUNNER_PAT" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
-    "https://api.github.com/orgs/${GITHUB_ORG}/actions/runners/registration-token")
+    "https://api.github.com/orgs/${GH_RUNNER_ORG}/actions/runners/registration-token")
 
   TOKEN=$(echo "$TOKEN_RES" | jq -r .token)
 
