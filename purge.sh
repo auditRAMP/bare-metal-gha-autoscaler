@@ -17,7 +17,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 
 if [ -z "${GH_RUNNER_ORG:-}" ]; then
-  echo "Error: GH_RUNNER_ORG environment variable must be set (e.g. export GH_RUNNER_ORG=auditRAMP)."
+  echo "Error: GH_RUNNER_ORG environment variable must be set to the GitHub org that owns these runners (e.g. export GH_RUNNER_ORG=my-org)."
   exit 1
 fi
 
