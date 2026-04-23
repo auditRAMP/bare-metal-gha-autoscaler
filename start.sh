@@ -90,6 +90,15 @@ for i in $(seq 1 $MAX_RUNNERS); do
   fi
 done
 
+# Verify required scripts exist before attempting to launch
+for REQUIRED_SCRIPT in runner-loop.sh autoscaler.sh; do
+  if [ ! -f "$SCRIPT_DIR/$REQUIRED_SCRIPT" ]; then
+    echo "Error: Required script '$REQUIRED_SCRIPT' is missing from $SCRIPT_DIR."
+    echo "Try restoring it with: git checkout HEAD -- $REQUIRED_SCRIPT"
+    exit 1
+  fi
+done
+
 # Ensure the scripts are executable
 chmod +x "$SCRIPT_DIR/runner-loop.sh"
 chmod +x "$SCRIPT_DIR/autoscaler.sh"
