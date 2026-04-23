@@ -33,8 +33,8 @@ Before throwing CI/CD jobs at this coordinator, ensure you have natively install
 
 ## Quick Start Guide
 
-### 1. Supply your API Token
-You must export a highly-scoped Personal Access Token (PAT) so the core daemon can dynamically request one-time runner registration keys and monitor `/actions/runners`. 
+### 1. Supply your API Token and target Org
+You must export a highly-scoped Personal Access Token (PAT) so the core daemon can dynamically request one-time runner registration keys and monitor `/actions/runners`, plus the org the runners should belong to.
 
 **Required PAT Scopes:**
 - **Classic PAT**: Must have the `admin:org` scope to manage organization-level runners.
@@ -42,7 +42,15 @@ You must export a highly-scoped Personal Access Token (PAT) so the core daemon c
 
 ```bash
 export GH_RUNNER_PAT="github_pat_XXXXX..."
+export GH_RUNNER_ORG="my-org"
 ```
+
+**Optional environment variables:**
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `GH_RUNNER_NAME_PREFIX` | `baremetal-runner` | Prefix used when registering each runner. Final name is `${prefix}-<N>-<machine-hash>`. |
+| `GH_RUNNER_GROUP` | *(unset — uses org default)* | If set, passed to `config.sh` as `--runnergroup`. |
 
 ### 2. Tune your Hardware Capacities
 Open `scaler.properties` and optimize the maximum compute limit for your specific hardware.
@@ -64,6 +72,19 @@ Need to freeze the hardware or reboot? Use the `stop.sh` utility to securely exe
 ```bash
 ./stop.sh
 ```
+
+If you want a full clean slate — deregistering runners from GitHub and wiping the extracted binaries, tarball, and persisted `.machine-id` — use `purge.sh` instead. This is the right tool before decommissioning a host or re-keying to a new org/prefix.
+```bash
+./purge.sh
+```
+
+## Multi-Machine Deployments
+
+This daemon is designed to run on many hosts against the same GitHub org without collision. On first start, each checkout stamps a random 6-char hex identifier into a local `.machine-id` file. That identifier is appended to every runner name (e.g. `baremetal-runner-1-a1b2c3`), and the autoscaler's GitHub-side filters are scoped to names ending in that suffix.
+
+The practical effect: each machine manages only the runners it registered itself. A machine configured with `MIN_IDLE=1` will always maintain its own idle runner regardless of how many idle runners other machines happen to have online.
+
+The `.machine-id` file is gitignored so every host generates its own on first launch. `purge.sh` deletes it; the next `./start.sh` will stamp a fresh one.
 
 ## Monitoring the Brain
 

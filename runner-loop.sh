@@ -15,10 +15,20 @@ if [ -z "$GH_RUNNER_PAT" ]; then
   exit 1
 fi
 
-GITHUB_ORG="auditRAMP"
-RUNNER_GROUP="Mac Mini K8s Runner Group"
+if [ -z "${GH_RUNNER_ORG:-}" ]; then
+  echo "Error: GH_RUNNER_ORG environment variable is not set."
+  exit 1
+fi
 
-echo "[Runner $RUNNER_ID] Starting ephemeral loop in $RUNNER_DIR"
+RUNNER_NAME_PREFIX="${GH_RUNNER_NAME_PREFIX:-baremetal-runner}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
+# shellcheck source=machine-id.sh
+source "$SCRIPT_DIR/machine-id.sh"
+MACHINE_HASH=$(ensure_machine_id "$SCRIPT_DIR")
+RUNNER_NAME="${RUNNER_NAME_PREFIX}-${RUNNER_ID}-${MACHINE_HASH}"
+
+echo "[Runner $RUNNER_ID] Starting ephemeral loop in $RUNNER_DIR (name=$RUNNER_NAME)"
 
 # Move to the physical runner directory
 cd "$RUNNER_DIR" || exit 1
@@ -48,15 +58,21 @@ while true; do
     continue
   fi
 
-  echo "[Runner $RUNNER_ID] Configuring ephemeral runner replacing target 'audit-runner-baremetal-${RUNNER_ID}'..."
+  echo "[Runner $RUNNER_ID] Configuring ephemeral runner replacing target '${RUNNER_NAME}'..."
 
-  ./config.sh \
-    --url "https://github.com/${GITHUB_ORG}" \
-    --token "$TOKEN" \
-    --name "audit-runner-baremetal-${RUNNER_ID}" \
-    --ephemeral \
-    --unattended \
+  CONFIG_ARGS=(
+    --url "https://github.com/${GH_RUNNER_ORG}"
+    --token "$TOKEN"
+    --name "${RUNNER_NAME}"
+    --ephemeral
+    --unattended
     --replace
+  )
+  if [ -n "${GH_RUNNER_GROUP:-}" ]; then
+    CONFIG_ARGS+=(--runnergroup "$GH_RUNNER_GROUP")
+  fi
+
+  ./config.sh "${CONFIG_ARGS[@]}"
 
   if [ $? -ne 0 ]; then
      echo "[Runner $RUNNER_ID] ERROR configuring runner. Retrying in 30 seconds..."

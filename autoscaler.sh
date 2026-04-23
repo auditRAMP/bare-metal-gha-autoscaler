@@ -2,14 +2,25 @@
 # autoscaler.sh - Intelligent API-driven bare-metal autoscaler
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
-GITHUB_ORG="auditRAMP"
 
 if [ -z "$GH_RUNNER_PAT" ]; then
   echo "[Autoscaler] Critical Error: GH_RUNNER_PAT missing. Cannot query GitHub API."
   exit 1
 fi
 
-echo "=== Bare-Metal API Autoscaler Started ==="
+if [ -z "${GH_RUNNER_ORG:-}" ]; then
+  echo "[Autoscaler] Critical Error: GH_RUNNER_ORG missing. Cannot target GitHub org."
+  exit 1
+fi
+
+# shellcheck source=machine-id.sh
+source "$SCRIPT_DIR/machine-id.sh"
+MACHINE_HASH=$(ensure_machine_id "$SCRIPT_DIR")
+RUNNER_NAME_PREFIX="${GH_RUNNER_NAME_PREFIX:-baremetal-runner}"
+RUNNER_NAME_PREFIX_MATCH="${RUNNER_NAME_PREFIX}-"
+RUNNER_NAME_SUFFIX="-${MACHINE_HASH}"
+
+echo "=== Bare-Metal API Autoscaler Started (machine=${MACHINE_HASH}, prefix=${RUNNER_NAME_PREFIX}) ==="
 echo "The daemon uses scaler.properties to hot-reload values dynamically."
 
 while true; do
@@ -50,7 +61,7 @@ while true; do
     -H "Accept: application/vnd.github+json" \
     -H "Authorization: Bearer $GH_RUNNER_PAT" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
-    "https://api.github.com/orgs/${GITHUB_ORG}/actions/runners")
+    "https://api.github.com/orgs/${GH_RUNNER_ORG}/actions/runners")
 
   # Detect rate limiting or API outage
   if ! echo "$API_RESPONSE" | jq -e '.runners' >/dev/null 2>&1; then
@@ -59,12 +70,12 @@ while true; do
       continue
   fi
 
-  # Filter down to exactly the ones named "audit-runner-baremetal-X"
+  # Filter down to this machine's runners only: "<prefix>-<N>-<machine-hash>"
   # Count how many are strictly online and idle (busy = false)
-  IDLE_COUNT=$(echo "$API_RESPONSE" | jq '[.runners[] | select(.name | startswith("audit-runner-baremetal-")) | select(.status == "online" and .busy == false)] | length')
-  
-  # Count total online baremetal runners just for parity logic
-  ONLINE_COUNT=$(echo "$API_RESPONSE" | jq '[.runners[] | select(.name | startswith("audit-runner-baremetal-")) | select(.status == "online")] | length')
+  IDLE_COUNT=$(echo "$API_RESPONSE" | jq --arg pfx "$RUNNER_NAME_PREFIX_MATCH" --arg sfx "$RUNNER_NAME_SUFFIX" '[.runners[] | select(.name | startswith($pfx)) | select(.name | endswith($sfx)) | select(.status == "online" and .busy == false)] | length')
+
+  # Count total online runners for this machine only
+  ONLINE_COUNT=$(echo "$API_RESPONSE" | jq --arg pfx "$RUNNER_NAME_PREFIX_MATCH" --arg sfx "$RUNNER_NAME_SUFFIX" '[.runners[] | select(.name | startswith($pfx)) | select(.name | endswith($sfx)) | select(.status == "online")] | length')
 
   # SCALING LOGIC
   
@@ -73,7 +84,7 @@ while true; do
     # Find the lowest available index
     for i in $(seq 1 $MAX_RUNNERS); do
       if [[ ! " ${ALL_RUNNING_INDEXES[*]} " =~ " ${i} " ]]; then
-        echo "[Autoscaler] GitHub API reports $IDLE_COUNT Idle baremetal runners. Scaling UP Runner $i..."
+        echo "[Autoscaler] Machine ${MACHINE_HASH} has $IDLE_COUNT idle runner(s). Scaling UP Runner $i..."
         RUNNER_PATH="$SCRIPT_DIR/actions-runner-${i}"
         
         nohup "$SCRIPT_DIR/runner-loop.sh" "$RUNNER_PATH" "$i" > "$SCRIPT_DIR/runner-${i}.log" 2>&1 &
@@ -92,7 +103,7 @@ while true; do
     IFS=$'\n' sorted=($(sort -nr <<<"${ALL_RUNNING_INDEXES[*]}")); unset IFS
     KILL_INDEX=${sorted[0]}
     
-    echo "[Autoscaler] GitHub API reports $IDLE_COUNT Idle baremetal runners. Scaling DOWN Runner $KILL_INDEX..."
+    echo "[Autoscaler] Machine ${MACHINE_HASH} has $IDLE_COUNT idle runner(s). Scaling DOWN Runner $KILL_INDEX..."
     
     if [ -f "$SCRIPT_DIR/runner-${KILL_INDEX}.pid" ]; then
         PID=$(cat "$SCRIPT_DIR/runner-${KILL_INDEX}.pid")
