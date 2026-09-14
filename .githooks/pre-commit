@@ -1,0 +1,8 @@
+#!/bin/sh
+# Repo pre-commit. Enable once per clone:
+#
+#     git config core.hooksPath .githooks
+#
+# Tracked in the repo on purpose: a hook copied into .git/hooks drifts silently
+# from the version under review, and a fresh clone gets no protection at all.
+exec "$(git rev-parse --show-toplevel)/.githooks/secret-guard.sh"

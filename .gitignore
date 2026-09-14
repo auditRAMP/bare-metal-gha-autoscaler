@@ -4,3 +4,9 @@
 *.gz
 actions-runner-*/
 .machine-id
+# Credential-bearing artefacts. .run/ is how an AWS key reached
+# auditRAMP/backend history on 2026-02-21.
+.run/
+*.pem
+*.p12
+*.jks
