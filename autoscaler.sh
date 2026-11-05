@@ -60,6 +60,39 @@ ensure_runner_dir() {
 echo "=== Bare-Metal API Autoscaler Started (machine=${MACHINE_HASH}, prefix=${RUNNER_NAME_PREFIX}) ==="
 echo "The daemon uses scaler.properties to hot-reload values dynamically."
 
+HEADERS_FILE=$(mktemp -t autoscaler-headers.XXXXXX)
+BODY_FILE=$(mktemp -t autoscaler-body.XXXXXX)
+trap 'rm -f "$HEADERS_FILE" "$BODY_FILE"' EXIT
+
+# State for error classification + de-duped logging across iterations.
+# We classify each tick into one of: ok / network / ratelimit / auth / http / parse.
+# Consecutive identical failures are logged once with a count, so a Wi-Fi blip
+# does not flood the log with hundreds of identical "Rate Limit" lines.
+LAST_ERROR_KIND=""
+LAST_ERROR_REPEAT=0
+NETWORK_BACKOFF=15
+
+log_status() {
+  local kind="$1"; shift
+  local msg="$*"
+  if [ "$kind" = "$LAST_ERROR_KIND" ]; then
+    LAST_ERROR_REPEAT=$((LAST_ERROR_REPEAT + 1))
+    # Log on 1st, 2nd, then every 10th repeat so persistent issues stay visible
+    # without flooding.
+    if [ $LAST_ERROR_REPEAT -le 2 ] || [ $((LAST_ERROR_REPEAT % 10)) -eq 0 ]; then
+      echo "[Autoscaler] $msg (repeat #$LAST_ERROR_REPEAT)"
+    fi
+  else
+    if [ -n "$LAST_ERROR_KIND" ] && [ "$kind" = "ok" ]; then
+      echo "[Autoscaler] Recovered from '$LAST_ERROR_KIND' after $LAST_ERROR_REPEAT tick(s)."
+    fi
+    [ "$kind" != "ok" ] && echo "[Autoscaler] $msg"
+    LAST_ERROR_KIND="$kind"
+    LAST_ERROR_REPEAT=1
+    [ "$kind" = "ok" ] && LAST_ERROR_KIND="" && LAST_ERROR_REPEAT=0
+  fi
+}
+
 while true; do
   declare -a ALL_RUNNING_INDEXES=()
   
@@ -93,19 +126,65 @@ while true; do
   
   TOTAL_RUNNING=${#ALL_RUNNING_INDEXES[@]}
   
-  # Poll GitHub backend
-  API_RESPONSE=$(curl -s -L \
+  # Poll GitHub backend. Capture HTTP status + headers separately from the
+  # body so we can classify failures honestly (a Wi-Fi blip is not a rate
+  # limit, an expired PAT is not a transient error, etc.).
+  HTTP_CODE=$(curl -s -L \
+    --max-time 20 \
+    -o "$BODY_FILE" \
+    -D "$HEADERS_FILE" \
+    -w "%{http_code}" \
     -H "Accept: application/vnd.github+json" \
     -H "Authorization: Bearer $GH_RUNNER_PAT" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
     "https://api.github.com/orgs/${GH_RUNNER_ORG}/actions/runners")
 
-  # Detect rate limiting or API outage
-  if ! echo "$API_RESPONSE" | jq -e '.runners' >/dev/null 2>&1; then
-      echo "[Autoscaler] API Error or Rate Limit hit. Retrying in 15 seconds..."
-      sleep 15
-      continue
+  if [ "$HTTP_CODE" = "000" ]; then
+    # curl could not complete the request: DNS failure, no route to host,
+    # connection reset mid-flight, or timeout. Classic Wi-Fi blip signature.
+    # Back off exponentially so we do not spam curl during a long outage.
+    log_status network "Network unreachable to api.github.com (curl failed). Backing off ${NETWORK_BACKOFF}s."
+    sleep $NETWORK_BACKOFF
+    NETWORK_BACKOFF=$((NETWORK_BACKOFF * 2))
+    [ $NETWORK_BACKOFF -gt 300 ] && NETWORK_BACKOFF=300
+    continue
   fi
+  NETWORK_BACKOFF=15  # reachable again — reset
+
+  if [ "$HTTP_CODE" = "401" ]; then
+    log_status auth "HTTP 401 from GitHub — PAT is invalid or revoked. Sleeping 60s."
+    sleep 60
+    continue
+  fi
+  if [ "$HTTP_CODE" = "403" ] || [ "$HTTP_CODE" = "429" ]; then
+    REMAINING=$(grep -i '^x-ratelimit-remaining:' "$HEADERS_FILE" 2>/dev/null | tr -d '\r' | awk '{print $2}')
+    if [ "$REMAINING" = "0" ]; then
+      RESET=$(grep -i '^x-ratelimit-reset:' "$HEADERS_FILE" 2>/dev/null | tr -d '\r' | awk '{print $2}')
+      NOW=$(date +%s)
+      WAIT=$((RESET - NOW + 5))
+      [ $WAIT -lt 30 ] && WAIT=30
+      log_status ratelimit "GitHub rate limit exhausted. Sleeping ${WAIT}s until window reset."
+      sleep $WAIT
+    else
+      log_status auth "HTTP $HTTP_CODE from GitHub (likely PAT lacks scope or org SSO). Sleeping 60s."
+      sleep 60
+    fi
+    continue
+  fi
+  if [ "$HTTP_CODE" != "200" ]; then
+    log_status http "HTTP $HTTP_CODE from GitHub. Retrying in 15s."
+    sleep 15
+    continue
+  fi
+
+  API_RESPONSE=$(cat "$BODY_FILE")
+  if ! echo "$API_RESPONSE" | jq -e '.runners' >/dev/null 2>&1; then
+    log_status parse "HTTP 200 but body is not parseable JSON with .runners. Retrying in 15s."
+    sleep 15
+    continue
+  fi
+
+  log_status ok ""
 
   # Filter down to this machine's runners only: "<prefix>-<N>-<machine-hash>"
   # Count how many are strictly online and idle (busy = false)
