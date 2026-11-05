@@ -1,0 +1,22 @@
+# Starts one runner fleet at boot. The instance name is the checkout directory
+# under ~/Tools, e.g. gha-fleet@bare-metal-gha-autoscaler.service.
+#
+# Needs `loginctl enable-linger`, or the fleet waits for a login and dies at the
+# last logout.
+#
+# oneshot rather than Restart=: supervision would undo a manual ./stop.sh.
+[Unit]
+Description=GitHub Actions runner fleet (%i)
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/Tools/%i
+# Pid files from before a reboot can name unrelated processes now, so clear them
+# rather than letting stop.sh kill -9 whatever holds those pids.
+ExecStartPre=/bin/sh -c 'rm -f %h/Tools/%i/*.pid'
+ExecStart=%h/.local/bin/direnv exec . ./start.sh
+ExecStop=%h/Tools/%i/stop.sh
+
+[Install]
+WantedBy=default.target

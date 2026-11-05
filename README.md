@@ -82,6 +82,18 @@ If you want a full clean slate — deregistering runners from GitHub and wiping 
 ./purge.sh
 ```
 
+## Starting at Boot (Linux)
+
+`systemd/gha-fleet@.service` starts a fleet at boot. The instance name is the checkout directory under `~/Tools`:
+```bash
+cp systemd/gha-fleet@.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now gha-fleet@bare-metal-gha-autoscaler.service
+loginctl enable-linger
+```
+
+From then on, stop and start that fleet with `systemctl --user`. It restarts only at boot, not after a crash, so a manual `./stop.sh` stays stopped.
+
 ## Multi-Machine Deployments
 
 This daemon is designed to run on many hosts against the same GitHub org without collision. On first start, each checkout stamps a random 6-char hex identifier into a local `.machine-id` file. That identifier is appended to every runner name (e.g. `baremetal-runner-1-a1b2c3`), and the autoscaler's GitHub-side filters are scoped to names ending in that suffix.
