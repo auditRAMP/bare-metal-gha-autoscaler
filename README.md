@@ -40,10 +40,14 @@ You must export a highly-scoped Personal Access Token (PAT) so the core daemon c
 - **Classic PAT**: Must have the `admin:org` scope to manage organization-level runners.
 - **Fine-Grained PAT**: Must grant **Read and Write** access to the Organization's **Self-hosted runners** permission.
 
+Put both in a gitignored `.envrc` at the checkout root and load it with [direnv](https://direnv.net/), so each checkout on a host carries its own org and PAT:
+
 ```bash
 export GH_RUNNER_PAT="github_pat_XXXXX..."
 export GH_RUNNER_ORG="my-org"
 ```
+
+Run `direnv allow` once, and again after any edit. Outside a direnv shell, use `direnv exec . ./start.sh`.
 
 **Optional environment variables:**
 
