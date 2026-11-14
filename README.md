@@ -57,7 +57,7 @@ Run `direnv allow` once, and again after any edit. Outside a direnv shell, use `
 | `GH_RUNNER_GROUP` | *(unset — uses org default)* | If set, passed to `config.sh` as `--runnergroup`. |
 
 ### 2. Tune your Hardware Capacities
-Open `scaler.properties` and optimize the maximum compute limit for your specific hardware.
+Copy `scaler.properties.example` to `scaler.properties` and optimize the maximum compute limit for your specific hardware. Each checkout keeps its own gitignored copy, so two fleets on one host can have different limits. Without one, the scripts use the defaults below.
 ```properties
 MAX_RUNNERS=5
 MIN_IDLE=1
