@@ -40,10 +40,14 @@ You must export a highly-scoped Personal Access Token (PAT) so the core daemon c
 - **Classic PAT**: Must have the `admin:org` scope to manage organization-level runners.
 - **Fine-Grained PAT**: Must grant **Read and Write** access to the Organization's **Self-hosted runners** permission.
 
+Put both in a gitignored `.envrc` at the checkout root and load it with [direnv](https://direnv.net/), so each checkout on a host carries its own org and PAT:
+
 ```bash
 export GH_RUNNER_PAT="github_pat_XXXXX..."
 export GH_RUNNER_ORG="my-org"
 ```
+
+Run `direnv allow` once, and again after any edit. Outside a direnv shell, use `direnv exec . ./start.sh`.
 
 **Optional environment variables:**
 
@@ -77,6 +81,18 @@ If you want a full clean slate — deregistering runners from GitHub and wiping 
 ```bash
 ./purge.sh
 ```
+
+## Starting at Boot (Linux)
+
+`systemd/gha-fleet@.service` starts a fleet at boot. The instance name is the checkout directory under `~/Tools`:
+```bash
+cp systemd/gha-fleet@.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now gha-fleet@bare-metal-gha-autoscaler.service
+loginctl enable-linger
+```
+
+From then on, stop and start that fleet with `systemctl --user`. It restarts only at boot, not after a crash, so a manual `./stop.sh` stays stopped.
 
 ## Multi-Machine Deployments
 

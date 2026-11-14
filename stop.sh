@@ -6,8 +6,10 @@ echo "=== Stopping Bare-Metal Runners ==="
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 
 # First, kill the autoscaler so it doesn't try to revive runners
-echo "Terminating all Autoscaler daemons globally to prevent rogue ghosting..."
-pkill -9 -f "autoscaler.sh" || true
+# Anchored on this checkout: a bare pattern would also kill any other fleet on
+# this host.
+echo "Terminating this checkout's Autoscaler daemon..."
+pkill -9 -f "$SCRIPT_DIR/autoscaler.sh" || true
 rm -f "$SCRIPT_DIR/autoscaler.pid"
 
 # Ensure all potential loop workers are stopped regardless of scalar limits
@@ -28,7 +30,7 @@ done
 
 # Now we need to terminate actual runner listener binaries that might be orphaned by the hard kill
 echo "Terminating any lingering GitHub Runner Listeners..."
-pkill -f "Runner.Listener" || true
+pkill -f "$SCRIPT_DIR/actions-runner-[0-9]+/bin/Runner.Listener" || true
 
 # Extract max limit to ensure we purge all possible configured directories
 MAX_RUNNERS=5

@@ -154,8 +154,9 @@ while true; do
 
     # Signal the listener to deregister first so GitHub marks it offline.
     # The cmdline is `<script_dir>/actions-runner-N/bin/Runner.Listener run`,
-    # so anchor the pkill regex on the directory/binary path.
-    pkill -INT -f "actions-runner-${KILL_INDEX}/bin/Runner.Listener" 2>/dev/null || true
+    # so anchor the pkill regex on the full path. Matching from actions-runner-N
+    # alone would also hit the same-numbered runner of another fleet on this host.
+    pkill -INT -f "$SCRIPT_DIR/actions-runner-${KILL_INDEX}/bin/Runner.Listener" 2>/dev/null || true
 
     # Give the listener a few seconds to cleanly deregister from GitHub
     sleep 5
@@ -172,7 +173,7 @@ while true; do
     # Force-kill any listener still lingering after graceful window.
     # Without this, a SIGKILL on the loop shell would orphan the Runner.Listener
     # child (reparented to init), keeping it online in GitHub's view.
-    pkill -9 -f "actions-runner-${KILL_INDEX}/bin/Runner.Listener" 2>/dev/null || true
+    pkill -9 -f "$SCRIPT_DIR/actions-runner-${KILL_INDEX}/bin/Runner.Listener" 2>/dev/null || true
   fi
   
   # Your total authenticated API capacity is natively 5,000 / hour.
