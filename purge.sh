@@ -23,6 +23,15 @@ fi
 
 RUNNER_NAME_PREFIX="${GH_RUNNER_NAME_PREFIX:-baremetal-runner}"
 
+_delete_runner() {
+  local rid="$1"
+  curl -s -o /dev/null -w "%{http_code}" -L -X DELETE \
+    -H "Accept: application/vnd.github+json" \
+    -H "Authorization: Bearer $GH_RUNNER_PAT" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    "https://api.github.com/orgs/${GH_RUNNER_ORG}/actions/runners/${rid}"
+}
+
 echo "=== Purging Bare-Metal Runner State on this machine (org=${GH_RUNNER_ORG}) ==="
 
 # Capture this machine's identity BEFORE stop.sh runs and before we wipe
@@ -78,12 +87,16 @@ else
         RID="${LINE%% *}"
         RNAME="${LINE#* }"
         echo "Deleting runner '$RNAME' (id=$RID)..."
-        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -L -X DELETE \
-          -H "Accept: application/vnd.github+json" \
-          -H "Authorization: Bearer $GH_RUNNER_PAT" \
-          -H "X-GitHub-Api-Version: 2022-11-28" \
-          "https://api.github.com/orgs/${GH_RUNNER_ORG}/actions/runners/${RID}")
-        if [ "$HTTP_CODE" != "204" ]; then
+        HTTP_CODE=$(_delete_runner "$RID")
+        if [ "$HTTP_CODE" = "422" ]; then
+          # 422 means GitHub still considers the runner busy — its heartbeat
+          # has not timed out yet because stop.sh killed the listener without
+          # a clean deregister. Wait for the server-side timeout, then retry.
+          echo "  -> runner busy on GitHub side; waiting 75s for heartbeat timeout, then retrying..."
+          sleep 75
+          HTTP_CODE=$(_delete_runner "$RID")
+        fi
+        if [ "$HTTP_CODE" != "204" ] && [ "$HTTP_CODE" != "404" ]; then
           echo "WARNING: delete returned HTTP $HTTP_CODE for runner '$RNAME' (id=$RID)."
         fi
       done <<< "$MATCHES"
@@ -93,7 +106,23 @@ fi
 
 # 3. Wipe all extracted runner directories on this machine.
 echo "Removing all actions-runner-* directories..."
-rm -rf "$SCRIPT_DIR"/actions-runner-*/
+shopt -s nullglob
+RUNNER_DIRS=("$SCRIPT_DIR"/actions-runner-*/)
+shopt -u nullglob
+if [ ${#RUNNER_DIRS[@]} -gt 0 ]; then
+  rm -rf "${RUNNER_DIRS[@]}" 2>/dev/null || true
+  # CI jobs running in Docker write into _work/ as container-root, which
+  # becomes host-root on the bind mount. Unprivileged rm above silently
+  # skips those files and leaves the parent dirs behind, so sweep with sudo.
+  REMAINING=()
+  for d in "${RUNNER_DIRS[@]}"; do
+    [ -e "$d" ] && REMAINING+=("$d")
+  done
+  if [ ${#REMAINING[@]} -gt 0 ]; then
+    echo "  -> ${#REMAINING[@]} dir(s) survived (likely root-owned Docker job artifacts). Escalating with sudo..."
+    sudo rm -rf "${REMAINING[@]}"
+  fi
+fi
 
 # 4. Wipe the downloaded tarball so the next start.sh pulls a fresh one.
 echo "Removing downloaded runner tarball(s)..."
